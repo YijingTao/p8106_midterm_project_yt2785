@@ -1,0 +1,332 @@
+---
+title: "Midterm Project"
+author: "Yijing Tao yt2785"
+date: '2022-03-16'
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(ISLR)
+library(glmnet)
+library(caret)
+library(corrplot)
+library(plotmo)
+library(mgcv)
+library(earth)
+library(splines)
+library(mgcv)
+library(pdp)
+library(earth)
+library(tidyverse)
+library(ggplot2)
+library(lasso2)
+```
+
+## import data set (70% to train data while 30% to test data)
+```{r}
+expect_df_nores = read_csv("./Life Expectancy Data.csv") %>% 
+  data.frame() %>% 
+  na.omit() %>% 
+  select(-Country, -Life.expectancy)
+expect_df_res = read_csv("./Life Expectancy Data.csv") %>% 
+  data.frame() %>% 
+  na.omit() %>% 
+  select(Life.expectancy)
+expect_df = cbind(expect_df_nores, expect_df_res) %>% 
+  data.frame() %>% 
+  relocate(Status)
+
+expect_df2 <- model.matrix(Life.expectancy ~ ., expect_df)[ ,-1]
+
+set.seed(2022)
+trainRows <- createDataPartition(expect_df$Life.expectancy, p = .7, list = F)
+train <- expect_df[trainRows,]
+x1 <- expect_df2[trainRows,]
+y1 <- expect_df$Life.expectancy[trainRows]
+
+# matrix of predictors (glmnet uses input matrix)
+test <- expect_df[-trainRows,]
+x2 <- expect_df4[-trainRows,]
+y2 <- expect_df$Life.expectancy[-trainRows]
+
+ctrl <- trainControl(method = "cv", number = 10)
+```
+
+## visualization
+```{r, fig.height = 4}
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col <- rgb(.2, .4, .2, .5)
+theme1$plot.symbol$pch <- 16
+theme1$plot.line$col <- rgb(.8, .1, .1, 1)
+theme1$plot.line$lwd <- 2
+theme1$strip.background$col <- rgb(.0, .2, .6, .2)
+trellis.par.set(theme1)
+
+featurePlot(x = train[ ,2:20], 
+            y = y1, 
+            plot = "scatter", 
+            span = .5, 
+            scale = TRUE,
+            labels = c("Predictors","Y"),
+            type = c("p", "smooth"))
+
+ggplot(train, aes(x = Life.expectancy)) + 
+  geom_density(aes(color = Status))
+```
+
+## KNN model
+```{r}
+set.seed(2022)
+knn.fit <- train(Life.expectancy ~., 
+                data = train, 
+                method = "knn",
+                scale = TRUE,
+                trControl = ctrl)
+
+knn.pred <- predict(knn.fit, newdata = test[,1:20])
+# test error
+knn_te <- mean((knn.pred - y2)^2)
+```
+
+## linear model
+```{r}
+set.seed(2022)
+lm.fit <- train(Life.expectancy ~ ., 
+                data = train,
+                method = "lm",
+                scale = TRUE,
+                trControl = ctrl)
+
+lm.pred <- predict(lm.fit, newdata = test[,1:20])
+# test error
+lm_te <- mean((lm.pred - y2)^2)
+```
+
+## Ridge
+```{r}
+set.seed(2022)
+ridge.fit <- train(x = x1, 
+                   y = y1,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 0, 
+                                          lambda = exp(seq(5, -2, length=100))),
+                   # preProc = c("center", "scale"),
+                   scale = TRUE,
+                   trControl = ctrl)
+
+plot(ridge.fit, xTrans = log)
+
+ridge.fit$bestTune
+
+# coefficients in the final model
+coef(ridge.fit$finalModel, s = ridge.fit$bestTune$lambda)
+
+ridge.pred <- predict(ridge.fit, newdata = x2)
+# test error
+ridge_te <- mean((ridge.pred - y2)^2)
+```
+
+## Lasso
+```{r}
+set.seed(2022)
+lasso.fit <- train(x = x1, 
+                   y = y1,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 1, 
+                                          lambda = exp(seq(5, -2, length=100))),
+                   trControl = ctrl,
+                   scale = TRUE)
+plot(lasso.fit, xTrans = log)
+
+lasso.fit$bestTune
+
+coef(lasso.fit$finalModel, lasso.fit$bestTune$lambda)
+
+lasso.pred <- predict(lasso.fit, newdata = x2)
+# test error
+lasso_te <- mean((lasso.pred - y2)^2)
+```
+
+## Elastic net
+```{r}
+set.seed(2022)
+enet.fit <- train(x = x1,
+                  y = y1,
+                  method = "glmnet",
+                  tuneGrid = expand.grid(alpha = seq(0, 1, length = 21), 
+                                         lambda = exp(seq(5, -2, length = 50))),
+                  trControl = ctrl,
+                  scale = TRUE)
+
+enet.fit$bestTune
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+                    superpose.line = list(col = myCol))
+
+plot(enet.fit, par.settings = myPar)
+
+coef(enet.fit$finalModel, enet.fit$bestTune$lambda)
+
+enet.pred <- predict(enet.fit, newdata = x2)
+# test error
+enet_te <- mean((enet.pred - y2)^2)
+```
+
+## PCR
+```{r}
+set.seed(2022)
+pcr.fit <- train(x = x1, 
+                 y = y1,
+                  method = "pcr",
+                  tuneGrid = data.frame(ncomp = 1:20),
+                  trControl = ctrl,
+                  scale = TRUE)
+
+pcr.fit$bestTune
+
+# test error
+pcr.pred <- predict(pcr.fit, newdata = x2)
+pcr_te <- mean((y2 - pcr.pred)^2)
+
+ggplot(pcr.fit, highlight = TRUE) + theme_bw()
+```
+
+## PLS
+```{r}
+set.seed(2022)
+pls.fit <- train(x = x1, 
+                 y = y1,
+                 method = "pls",
+                 tuneGrid = data.frame(ncomp = 1:20),
+                 scale = TRUE,
+                 trControl = ctrl,
+                 preProcess = c("center", "scale"))
+
+pls.fit$bestTune
+
+#test error
+pls.pred <- predict(pls.fit, newdata = x2)
+pls_te <- mean((y2 - pls.pred)^2)
+
+ggplot(pls.fit, highlight = TRUE)
+```
+
+## GAM
+```{r}
+set.seed(2022)
+gam.fit <- train(x = x1, 
+                 y = y1,
+                 method = "gam",
+                 scale = TRUE,
+                 trControl = ctrl)
+
+gam.fit$bestTune
+
+gam.fit$finalModel
+
+#test error
+gam.pred <- predict(gam.fit, newdata = x2)
+gam_te <- mean((y2 - gam.pred)^2)
+```
+
+## MARS
+```{r}
+mars_grid <- expand.grid(degree = 1:5, 
+                         nprune = 10:30)
+
+set.seed(2022)
+mars.fit <- train(x = x1, 
+                  y = y1,
+                  method = "earth",
+                  tuneGrid = mars_grid,
+                  scale = TRUE,
+                  trControl = ctrl)
+
+ggplot(mars.fit)
+
+mars.fit$bestTune
+
+coef(mars.fit$finalModel) 
+
+#test error
+mars.pred <- predict(mars.fit, newdata = x2)
+mars_te <- mean((y2 - mars.pred)^2)
+```
+
+## Comparing different models
+```{r}
+model <- c("KNN","LN","RIDGE","LASSO","ENET","PCR","PLS","GAM","MARS")
+test_error <- c(knn_te,lm_te,ridge_te,lasso_te,enet_te,pcr_te,pls_te,gam_te,mars_te)
+test_error_df <- cbind(model, test_error)
+test_error_df <- as.data.frame(test_error_df)
+test_error_df
+
+resamp <- resamples(list(KNN = knn.fit,
+                         LN = lm.fit,
+                         RIDGE = ridge.fit,
+                         LASSO = lasso.fit,
+                         ENET = enet.fit,
+                         PCR = pcr.fit,
+                         PLS = pls.fit,
+                         GAM = gam.fit,
+                         MARS = mars.fit))
+summary(resamp)
+
+bwplot(resamp, metric = "RMSE")
+```
+**MARS is the best fitting model since it has the smallest RMSE.**
+
+```{r}
+summary(mars.fit)
+
+p1 <- pdp::partial(mars.fit, pred.var = c("Year"), grid.resolution = 10) %>%
+  autoplot()
+p2 <- pdp::partial(mars.fit, pred.var = c("Adult.Mortality"), grid.resolution = 10) %>%
+  autoplot()
+p3 <- pdp::partial(mars.fit, pred.var = c("Alcohol"), grid.resolution = 10) %>%
+  autoplot()
+p4 <- pdp::partial(mars.fit, pred.var = c("Hepatitis.B"), grid.resolution = 10) %>%
+  autoplot()
+p5 <- pdp::partial(mars.fit, pred.var = c("BMI"), grid.resolution = 10) %>%
+  autoplot()
+p6 <- pdp::partial(mars.fit, pred.var = c("Polio"), grid.resolution = 10) %>%
+  autoplot()
+p7 <- pdp::partial(mars.fit, pred.var = c("Diphtheria"), grid.resolution = 10) %>%
+  autoplot()
+p8 <- pdp::partial(mars.fit, pred.var = c("GDP"), grid.resolution = 10) %>%
+  autoplot()
+p9 <- pdp::partial(mars.fit, pred.var = c("thinness..1.19.years"), grid.resolution = 10) %>%
+  autoplot()
+p10 <- pdp::partial(mars.fit, pred.var = c("Income.composition.of.resources"), grid.resolution = 10) %>%
+  autoplot()
+#P11 <- pdp::partial(mars.fit, pred.var = c("Status"), grid.resolution = 10) %>%
+  autoplot()
+p12 <- pdp::partial(mars.fit, pred.var = c("infant.deaths"), grid.resolution = 10) %>%
+  autoplot()
+p13 <- pdp::partial(mars.fit, pred.var = c("percentage.expenditure"), grid.resolution = 10) %>%
+  autoplot()
+p14 <- pdp::partial(mars.fit, pred.var = c("Measles"), grid.resolution = 10) %>%
+  autoplot()
+p15 <- pdp::partial(mars.fit, pred.var = c("under.five.deaths"), grid.resolution = 10) %>%
+  autoplot()
+p16 <- pdp::partial(mars.fit, pred.var = c("Total.expenditure"), grid.resolution = 10) %>%
+  autoplot()
+p17 <- pdp::partial(mars.fit, pred.var = c("HIV.AIDS"), grid.resolution = 10) %>%
+  autoplot()
+p18 <- pdp::partial(mars.fit, pred.var = c("Population"), grid.resolution = 10) %>%
+  autoplot()
+p19 <- pdp::partial(mars.fit, pred.var = c("thinness.5.9.years"), grid.resolution = 10) %>%
+  autoplot()
+p20 <- pdp::partial(mars.fit, pred.var = c("Schooling"), grid.resolution = 10) %>%
+  autoplot()
+
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p12, p13, p14, p15, p16, p17, p18, p19, p20, ncol = 5)
+```
+
